@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import pytz
 from collections import deque
 
-# ==================== YAHAN DETAILS DALO ====================
+# ==================== DETAILS ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "8862228592:AAGHAAE71nqT9bSKE93DGF6ZYLf087Z3mVg"
 
 CHANNEL_IDS = [
@@ -59,13 +59,22 @@ def send_to_all(text=None, sticker=None):
         except Exception as e:
             print(f"Error sending to {ch}:", e)
 
+# FIX 1: Headers and Safe JSON Handling Added
 def fetch_results():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*"
+    }
     try:
-        r = requests.get(API_URL + f"?ts={int(time.time())}", timeout=8)
-        data = r.json()
-        return data.get("data", {}).get("list", [])
+        r = requests.get(API_URL + f"?ts={int(time.time())}", headers=headers, timeout=10)
+        if r.status_code == 200 and r.text.strip():
+            data = r.json()
+            return data.get("data", {}).get("list", [])
+        else:
+            print(f"API Returned empty or status {r.status_code}")
+            return []
     except Exception as e:
-        print("API Error:", e)
+        print("API Fetch Error:", e)
         return []
 
 def update_history():
@@ -84,7 +93,7 @@ def update_history():
                 "number": number,
                 "result": "BIG" if number >= 5 else "SMALL"
             })
-    print(f"History: {len(result_history)}")
+    print(f"History updated. Total items: {len(result_history)}")
 
 def predict(nums):
     if not nums or len(nums) < 3:
@@ -92,7 +101,7 @@ def predict(nums):
 
     latest = nums[-1]
     prevs = []
-    for i in range(1, len(nums)):
+    for i in range(1, len(nums) - 1):
         if nums[i] == latest:
             prevs.append(nums[i+1])
 
@@ -243,5 +252,10 @@ update_history()
 scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
 scheduler_thread.start()
 
-# Bot messages sunega (sticker File ID ke liye)
-bot.infinity_polling()
+# FIX 2: Webhook remove and Infinity Polling with robust options
+try:
+    bot.remove_webhook()
+except Exception:
+    pass
+
+bot.infinity_polling(timeout=10, long_polling_timeout=5, skip_pending=True)
