@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 import pytz
 from collections import deque
 
-# ==================== DETAILS ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "8862228592:AAGHAAE71nqT9bSKE93DGF6ZYLf087Z3mVg"
+# ==================== YAHAN DETAILS DALO ====================
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "8862228592:AAG-YjvmRhXi7kwd3THYA1S_N-nX478-Bv0"
 
 CHANNEL_IDS = [
     "-1004448042734",
@@ -27,6 +27,18 @@ STICKER_SECTION_END = "CAACAgUAAyEFAAMBCR--7gADdmqxkfD4onJjQYKlQpGsqJ2sabv2AAIVE
 # ============================================================
 
 REGISTER_LINK = "https://www.veergame31.com/#/register?invitationCode=11327394097"
+
+# ==================== FREE PROXIES ====================
+PROXIES = [
+    "http://47.242.123.138:8080",
+    "http://8.219.97.248:80",
+    "http://47.88.16.9:8080",
+    "http://47.243.175.55:80",
+    "http://8.213.197.190:80",
+    "http://47.250.11.121:80",
+    "http://8.219.222.137:80",
+]
+# ======================================================
 
 bot = telebot.TeleBot(BOT_TOKEN)
 IST = pytz.timezone('Asia/Kolkata')
@@ -59,23 +71,41 @@ def send_to_all(text=None, sticker=None):
         except Exception as e:
             print(f"Error sending to {ch}:", e)
 
-# FIX 1: Headers and Safe JSON Handling Added
 def fetch_results():
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*"
+        "Accept": "application/json, text/plain, */*",
     }
+
+    # Pehle proxies try karo
+    for proxy in PROXIES:
+        try:
+            proxies = {"http": proxy, "https": proxy}
+            r = requests.get(
+                API_URL + f"?ts={int(time.time())}",
+                timeout=10,
+                proxies=proxies,
+                headers=headers
+            )
+            if r.status_code == 200 and r.text.strip().startswith("{"):
+                data = r.json()
+                print(f"API success with proxy: {proxy}")
+                return data.get("data", {}).get("list", [])
+        except Exception as e:
+            print(f"Proxy failed ({proxy}): {e}")
+            continue
+
+    # Agar proxies fail ho jayein to bina proxy try karo
     try:
-        r = requests.get(API_URL + f"?ts={int(time.time())}", headers=headers, timeout=10)
-        if r.status_code == 200 and r.text.strip():
+        r = requests.get(API_URL + f"?ts={int(time.time())}", timeout=8, headers=headers)
+        if r.status_code == 200 and r.text.strip().startswith("{"):
             data = r.json()
+            print("API success without proxy")
             return data.get("data", {}).get("list", [])
-        else:
-            print(f"API Returned empty or status {r.status_code}")
-            return []
     except Exception as e:
-        print("API Fetch Error:", e)
-        return []
+        print("API Error (no proxy):", e)
+
+    return []
 
 def update_history():
     lst = fetch_results()
@@ -93,7 +123,7 @@ def update_history():
                 "number": number,
                 "result": "BIG" if number >= 5 else "SMALL"
             })
-    print(f"History updated. Total items: {len(result_history)}")
+    print(f"History: {len(result_history)}")
 
 def predict(nums):
     if not nums or len(nums) < 3:
@@ -101,9 +131,9 @@ def predict(nums):
 
     latest = nums[-1]
     prevs = []
-    for i in range(1, len(nums) - 1):
+    for i in range(1, len(nums)):
         if nums[i] == latest:
-            prevs.append(nums[i+1])
+            prevs.append(nums[i-1])
 
     if not prevs:
         return "BIG"
@@ -252,10 +282,5 @@ update_history()
 scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
 scheduler_thread.start()
 
-# FIX 2: Webhook remove and Infinity Polling with robust options
-try:
-    bot.remove_webhook()
-except Exception:
-    pass
-
-bot.infinity_polling(timeout=10, long_polling_timeout=5, skip_pending=True)
+# Bot messages sunega
+bot.infinity_polling()
