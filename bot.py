@@ -4,6 +4,7 @@ import schedule
 import time
 import threading
 import os
+import random
 from datetime import datetime, timedelta
 import pytz
 from collections import deque
@@ -28,7 +29,7 @@ STICKER_SECTION_END = "CAACAgUAAyEFAAMBCR--7gADdmqxkfD4onJjQYKlQpGsqJ2sabv2AAIVE
 
 REGISTER_LINK = "https://www.veergame31.com/#/register?invitationCode=11327394097"
 
-# ==================== FREE PROXIES ====================
+# ==================== STRONG FREE PROXIES ====================
 PROXIES = [
     "http://47.242.123.138:8080",
     "http://8.219.97.248:80",
@@ -37,8 +38,16 @@ PROXIES = [
     "http://8.213.197.190:80",
     "http://47.250.11.121:80",
     "http://8.219.222.137:80",
+    "http://47.74.152.29:80",
+    "http://47.251.43.115:80",
+    "http://8.212.165.2:80",
+    "http://47.236.19.45:80",
+    "http://47.245.56.108:80",
+    "http://8.222.149.156:80",
+    "http://47.254.47.61:80",
+    "http://47.91.29.151:80",
 ]
-# ======================================================
+# ============================================================
 
 bot = telebot.TeleBot(BOT_TOKEN)
 IST = pytz.timezone('Asia/Kolkata')
@@ -73,34 +82,42 @@ def send_to_all(text=None, sticker=None):
 
 def fetch_results():
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
     }
 
-    # Pehle proxies try karo
-    for proxy in PROXIES:
+    # Random order mein proxies try karo (zyada strong feel)
+    proxy_list = PROXIES.copy()
+    random.shuffle(proxy_list)
+
+    for proxy in proxy_list:
         try:
-            proxies = {"http": proxy, "https": proxy}
+            proxies = {
+                "http": proxy,
+                "https": proxy
+            }
             r = requests.get(
-                API_URL + f"?ts={int(time.time())}",
-                timeout=10,
+                API_URL + f"?ts={int(time.time()*1000)}",
+                timeout=12,
                 proxies=proxies,
                 headers=headers
             )
             if r.status_code == 200 and r.text.strip().startswith("{"):
                 data = r.json()
-                print(f"API success with proxy: {proxy}")
+                print(f"✅ API success → {proxy}")
                 return data.get("data", {}).get("list", [])
         except Exception as e:
-            print(f"Proxy failed ({proxy}): {e}")
+            print(f"❌ Proxy failed → {proxy}")
             continue
 
-    # Agar proxies fail ho jayein to bina proxy try karo
+    # Last try: bina proxy
     try:
-        r = requests.get(API_URL + f"?ts={int(time.time())}", timeout=8, headers=headers)
+        r = requests.get(API_URL + f"?ts={int(time.time()*1000)}", timeout=10, headers=headers)
         if r.status_code == 200 and r.text.strip().startswith("{"):
             data = r.json()
-            print("API success without proxy")
+            print("✅ API success (no proxy)")
             return data.get("data", {}).get("list", [])
     except Exception as e:
         print("API Error (no proxy):", e)
@@ -110,6 +127,7 @@ def fetch_results():
 def update_history():
     lst = fetch_results()
     if not lst:
+        print("⚠️ No data from API")
         return
     for item in reversed(lst):
         period = str(item.get("issueNumber", ""))
@@ -278,9 +296,7 @@ schedule.every(8).seconds.do(check_result)
 print("Bot start ho gaya...")
 update_history()
 
-# Scheduler background mein chalao
 scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
 scheduler_thread.start()
 
-# Bot messages sunega
 bot.infinity_polling()
