@@ -39,7 +39,7 @@ current_prediction = None
 predictions_in_section = 0
 MAX_PREDICTIONS = 6
 
-SECTION_TIMES = ["09:30", "11:30", "04:00", "06:25", "07:20", "09:30"]
+SECTION_TIMES = ["09:30", "11:30", "16:06", "06:25", "07:20", "09:30"]
 
 # ==================== DYNAMIC PROXY POOL ENGINE ====================
 DYNAMIC_PROXIES = set([
