@@ -1,15 +1,16 @@
-import telebot
-import requests
-import schedule
-import time
-import threading
 import os
 import random
-from datetime import datetime, timedelta
-import pytz
+import threading
+import time
 from collections import deque
+from datetime import datetime, timedelta
 
-# ==================== YAHAN DETAILS DALO ====================
+import pytz
+import requests
+import schedule
+import telebot
+
+# ==================== BOT CONFIGURATION ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "8862228592:AAG-YjvmRhXi7kwd3THYA1S_N-nX478-Bv0"
 
 CHANNEL_IDS = [
@@ -18,6 +19,9 @@ CHANNEL_IDS = [
     "-1002597141644",
     "-1002598601395",
 ]
+
+REGISTER_LINK = "https://www.veergame31.com/#/register?invitationCode=11327394097"
+API_URL = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json"
 # ============================================================
 
 # ==================== STICKER FILE IDs ====================
@@ -27,10 +31,18 @@ STICKER_LOSS = "CAACAgIAAxkBAAMNarGgwo8zyU5gcl2NcrRwi-YGWp4AAvNBAAJvs2hJX6Pg0NfE
 STICKER_SECTION_END = "CAACAgUAAyEFAAMBCR--7gADdmqxkfD4onJjQYKlQpGsqJ2sabv2AAIVEwACEuaBVsBXC_A_xfmkPQQ"
 # ============================================================
 
-REGISTER_LINK = "https://www.veergame31.com/#/register?invitationCode=11327394097"
+bot = telebot.TeleBot(BOT_TOKEN)
+IST = pytz.timezone('Asia/Kolkata')
 
-# ==================== STRONG FREE PROXIES ====================
-PROXIES = [
+result_history = deque(maxlen=60)
+current_prediction = None
+predictions_in_section = 0
+MAX_PREDICTIONS = 6
+
+SECTION_TIMES = ["09:30", "11:30", "15:00", "17:30", "19:20", "21:30"]
+
+# ==================== DYNAMIC PROXY POOL ENGINE ====================
+DYNAMIC_PROXIES = set([
     "http://47.242.123.138:8080",
     "http://8.219.97.248:80",
     "http://47.88.16.9:8080",
@@ -46,20 +58,49 @@ PROXIES = [
     "http://8.222.149.156:80",
     "http://47.254.47.61:80",
     "http://47.91.29.151:80",
+])
+
+PROXY_SOURCES = [
+    "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
+    "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
+    "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt"
 ]
+
+def fetch_live_proxies():
+    """Live source se dynamic free proxies fetch karta hai"""
+    global DYNAMIC_PROXIES
+    new_proxies = set()
+    for url in PROXY_SOURCES:
+        try:
+            res = requests.get(url, timeout=5)
+            if res.status_code == 200:
+                lines = res.text.strip().split("\n")
+                for line in lines[:100]:
+                    ip_port = line.strip()
+                    if ip_port and ":" in ip_port:
+                        if not ip_port.startswith("http"):
+                            new_proxies.add(f"http://{ip_port}")
+                        else:
+                            new_proxies.add(ip_port)
+        except Exception:
+            continue
+
+    if new_proxies:
+        DYNAMIC_PROXIES.update(new_proxies)
+        print(f"🔄 Proxy Pool Updated! Total Active Proxies: {len(DYNAMIC_PROXIES)}")
+
+def proxy_auto_refresher():
+    """Har 15 minute baad proxies refresh karta hai"""
+    while True:
+        try:
+            fetch_live_proxies()
+        except Exception as e:
+            print("Proxy auto-refresh error:", e)
+        time.sleep(900)
+
 # ============================================================
-
-bot = telebot.TeleBot(BOT_TOKEN)
-IST = pytz.timezone('Asia/Kolkata')
-
-API_URL = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json"
-
-result_history = deque(maxlen=60)
-current_prediction = None
-predictions_in_section = 0
-MAX_PREDICTIONS = 6
-
-SECTION_TIMES = ["09:30", "11:30", "15:00", "17:30", "19:20", "21:30"]
 
 @bot.message_handler(content_types=['sticker'])
 def get_sticker_id(message):
@@ -81,18 +122,25 @@ def send_to_all(text=None, sticker=None):
             print(f"Error sending to {ch}:", e)
 
 def fetch_results():
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    ]
+
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": random.choice(user_agents),
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
         "Connection": "keep-alive",
     }
 
-    # Random order mein proxies try karo (zyada strong feel)
-    proxy_list = PROXIES.copy()
+    # Proxy list Shuffle
+    proxy_list = list(DYNAMIC_PROXIES)
     random.shuffle(proxy_list)
 
-    for proxy in proxy_list:
+    # Maximum 15 best proxies test karenge fast response ke liye
+    for proxy in proxy_list[:15]:
         try:
             proxies = {
                 "http": proxy,
@@ -100,34 +148,33 @@ def fetch_results():
             }
             r = requests.get(
                 API_URL + f"?ts={int(time.time()*1000)}",
-                timeout=12,
+                timeout=5,
                 proxies=proxies,
                 headers=headers
             )
             if r.status_code == 200 and r.text.strip().startswith("{"):
                 data = r.json()
-                print(f"✅ API success → {proxy}")
+                print(f"✅ Fast Proxy API Success → {proxy}")
                 return data.get("data", {}).get("list", [])
-        except Exception as e:
-            print(f"❌ Proxy failed → {proxy}")
+        except Exception:
             continue
 
-    # Last try: bina proxy
+    # Fallback: Bina Proxy Ke Network Request
     try:
-        r = requests.get(API_URL + f"?ts={int(time.time()*1000)}", timeout=10, headers=headers)
+        r = requests.get(API_URL + f"?ts={int(time.time()*1000)}", timeout=8, headers=headers)
         if r.status_code == 200 and r.text.strip().startswith("{"):
             data = r.json()
-            print("✅ API success (no proxy)")
+            print("✅ Direct Connection API Success (No Proxy)")
             return data.get("data", {}).get("list", [])
     except Exception as e:
-        print("API Error (no proxy):", e)
+        print("API Error (Direct Connection):", e)
 
     return []
 
 def update_history():
     lst = fetch_results()
     if not lst:
-        print("⚠️ No data from API")
+        print("⚠️ No data received from API")
         return
     for item in reversed(lst):
         period = str(item.get("issueNumber", ""))
@@ -141,7 +188,7 @@ def update_history():
                 "number": number,
                 "result": "BIG" if number >= 5 else "SMALL"
             })
-    print(f"History: {len(result_history)}")
+    print(f"History Count: {len(result_history)}")
 
 def predict(nums):
     if not nums or len(nums) < 3:
@@ -168,18 +215,18 @@ def predict(nums):
 def next_period(period):
     try:
         return str(int(period) + 1)
-    except:
+    except Exception:
         return period
 
 def get_next_section_time():
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
-    
+
     for t in SECTION_TIMES:
         dt = IST.localize(datetime.strptime(f"{today} {t}", "%Y-%m-%d %H:%M"))
         if dt > now + timedelta(minutes=1):
             return dt.strftime("%I:%M %p")
-    
+
     return "09:30 AM (Kal)"
 
 def send_one_prediction():
@@ -259,7 +306,7 @@ APNA WALLET ME DEPOSIT KAR LO
 
 {REGISTER_LINK}"""
     send_to_all(text=msg)
-    print("Pre-section message bhej diya")
+    print("Pre-section message sent.")
 
 def start_section():
     global predictions_in_section, current_prediction
@@ -293,7 +340,12 @@ schedule.every().day.at("21:30").do(start_section)
 
 schedule.every(8).seconds.do(check_result)
 
-print("Bot start ho gaya...")
+print("Bot setup starting...")
+
+# Dynamic Proxy Threading Launch
+proxy_thread = threading.Thread(target=proxy_auto_refresher, daemon=True)
+proxy_thread.start()
+
 update_history()
 
 scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
