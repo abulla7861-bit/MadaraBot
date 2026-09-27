@@ -37,9 +37,12 @@ IST = pytz.timezone('Asia/Kolkata')
 result_history = deque(maxlen=60)
 current_prediction = None
 predictions_in_section = 0
-MAX_PREDICTIONS = 6
+MAX_PREDICTIONS = 10
 
-SECTION_TIMES = ["09:30", "11:30", "16:06", "06:25", "07:20", "09:30"]
+SECTION_TIMES = ["09:30", "11:30", "15:00", "17:30", "19:20", "21:30"]
+
+# Lock for Thread-Safe Global State Access
+state_lock = threading.Lock()
 
 # ==================== DYNAMIC PROXY POOL ENGINE ====================
 DYNAMIC_PROXIES = set([
@@ -65,7 +68,6 @@ PROXY_SOURCES = [
     "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
     "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
     "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
-    "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt"
 ]
 
 def fetch_live_proxies():
@@ -77,7 +79,7 @@ def fetch_live_proxies():
             res = requests.get(url, timeout=5)
             if res.status_code == 200:
                 lines = res.text.strip().split("\n")
-                for line in lines[:100]:
+                for line in lines[:80]:
                     ip_port = line.strip()
                     if ip_port and ":" in ip_port:
                         if not ip_port.startswith("http"):
@@ -88,7 +90,8 @@ def fetch_live_proxies():
             continue
 
     if new_proxies:
-        DYNAMIC_PROXIES.update(new_proxies)
+        with state_lock:
+            DYNAMIC_PROXIES.update(new_proxies)
         print(f"🔄 Proxy Pool Updated! Total Active Proxies: {len(DYNAMIC_PROXIES)}")
 
 def proxy_auto_refresher():
@@ -111,15 +114,19 @@ def get_sticker_id(message):
     print("===========================\n")
 
 def send_to_all(text=None, sticker=None):
-    for ch in CHANNEL_IDS:
-        try:
-            if sticker:
-                bot.send_sticker(ch, sticker)
-            if text:
-                bot.send_message(ch, text)
-            time.sleep(0.4)
-        except Exception as e:
-            print(f"Error sending to {ch}:", e)
+    """Non-blocking distribution across channels"""
+    def _send():
+        for ch in CHANNEL_IDS:
+            try:
+                if sticker:
+                    bot.send_sticker(ch, sticker)
+                if text:
+                    bot.send_message(ch, text)
+                time.sleep(0.3)
+            except Exception as e:
+                print(f"Error sending to {ch}:", e)
+    
+    threading.Thread(target=_send, daemon=True).start()
 
 def fetch_results():
     user_agents = [
@@ -135,39 +142,34 @@ def fetch_results():
         "Connection": "keep-alive",
     }
 
-    # Proxy list Shuffle
-    proxy_list = list(DYNAMIC_PROXIES)
+    with state_lock:
+        proxy_list = list(DYNAMIC_PROXIES)
     random.shuffle(proxy_list)
 
-    # Maximum 15 best proxies test karenge fast response ke liye
-    for proxy in proxy_list[:15]:
+    # Top 8 proxies with short timeout for speed
+    for proxy in proxy_list[:8]:
         try:
-            proxies = {
-                "http": proxy,
-                "https": proxy
-            }
+            proxies = {"http": proxy, "https": proxy}
             r = requests.get(
                 API_URL + f"?ts={int(time.time()*1000)}",
-                timeout=5,
+                timeout=3,
                 proxies=proxies,
                 headers=headers
             )
             if r.status_code == 200 and r.text.strip().startswith("{"):
                 data = r.json()
-                print(f"✅ Fast Proxy API Success → {proxy}")
                 return data.get("data", {}).get("list", [])
         except Exception:
             continue
 
-    # Fallback: Bina Proxy Ke Network Request
+    # Direct Fallback
     try:
-        r = requests.get(API_URL + f"?ts={int(time.time()*1000)}", timeout=8, headers=headers)
+        r = requests.get(API_URL + f"?ts={int(time.time()*1000)}", timeout=5, headers=headers)
         if r.status_code == 200 and r.text.strip().startswith("{"):
             data = r.json()
-            print("✅ Direct Connection API Success (No Proxy)")
             return data.get("data", {}).get("list", [])
     except Exception as e:
-        print("API Error (Direct Connection):", e)
+        print("API Direct Call Error:", e)
 
     return []
 
@@ -176,19 +178,21 @@ def update_history():
     if not lst:
         print("⚠️ No data received from API")
         return
-    for item in reversed(lst):
-        period = str(item.get("issueNumber", ""))
-        number = item.get("number")
-        if not period or number is None:
-            continue
-        number = int(number)
-        if not any(x["period"] == period for x in result_history):
-            result_history.append({
-                "period": period,
-                "number": number,
-                "result": "BIG" if number >= 5 else "SMALL"
-            })
-    print(f"History Count: {len(result_history)}")
+    
+    with state_lock:
+        for item in reversed(lst):
+            period = str(item.get("issueNumber", ""))
+            number = item.get("number")
+            if not period or number is None:
+                continue
+            number = int(number)
+            if not any(x["period"] == period for x in result_history):
+                result_history.append({
+                    "period": period,
+                    "number": number,
+                    "result": "BIG" if number >= 5 else "SMALL"
+                })
+        print(f"History Count: {len(result_history)}")
 
 def predict(nums):
     if not nums or len(nums) < 3:
@@ -232,39 +236,47 @@ def get_next_section_time():
 def send_one_prediction():
     global current_prediction, predictions_in_section
 
-    if current_prediction is not None:
-        return
-    if predictions_in_section >= MAX_PREDICTIONS:
-        return
+    with state_lock:
+        if current_prediction is not None or predictions_in_section >= MAX_PREDICTIONS:
+            return
 
     update_history()
-    if len(result_history) < 5:
-        return
+    
+    with state_lock:
+        if len(result_history) < 5:
+            return
 
-    nums = [x["number"] for x in result_history]
-    last_period = result_history[-1]["period"]
-    period = next_period(last_period)
-    pred = predict(nums)
+        nums = [x["number"] for x in result_history]
+        last_period = result_history[-1]["period"]
+        period = next_period(last_period)
+        pred = predict(nums)
+
+        current_prediction = {"period": period, "prediction": pred}
+        predictions_in_section += 1
+        curr_section_count = predictions_in_section
 
     msg = f"""📆 PERIOD NO  :-  {period}
 🎲 BET ON :-  {pred}
 🎯 STATUS     :-  Pending"""
 
     send_to_all(text=msg)
-    current_prediction = {"period": period, "prediction": pred}
-    predictions_in_section += 1
-    print(f"Prediction {predictions_in_section}/6 → {period} | {pred}")
+    print(f"Prediction {curr_section_count}/6 → {period} | {pred}")
 
 def check_result():
     global current_prediction, predictions_in_section
 
-    if current_prediction is None:
-        return
+    with state_lock:
+        if current_prediction is None:
+            return
+        local_pred = current_prediction.copy()
 
     update_history()
-    history_map = {x["period"]: x["result"] for x in result_history}
-    period = current_prediction["period"]
-    pred = current_prediction["prediction"]
+
+    with state_lock:
+        history_map = {x["period"]: x["result"] for x in result_history}
+
+    period = local_pred["period"]
+    pred = local_pred["prediction"]
 
     if period not in history_map:
         return
@@ -278,9 +290,12 @@ def check_result():
         send_to_all(sticker=STICKER_LOSS)
 
     print(f"Result: {period} → {status}")
-    current_prediction = None
 
-    if predictions_in_section >= MAX_PREDICTIONS:
+    with state_lock:
+        current_prediction = None
+        done_section = (predictions_in_section >= MAX_PREDICTIONS)
+
+    if done_section:
         time.sleep(1.5)
         send_to_all(sticker=STICKER_SECTION_END)
 
@@ -293,7 +308,9 @@ NEXT SACTION TIMING :- {next_time}
 JIS BHAI NE BHI ID NAHI BANAYA HAI WO JALDI SE REGISTER KARO
 {REGISTER_LINK}"""
         send_to_all(text=end_msg)
-        predictions_in_section = 0
+        
+        with state_lock:
+            predictions_in_section = 0
         print("Section End")
     else:
         time.sleep(2)
@@ -310,45 +327,52 @@ APNA WALLET ME DEPOSIT KAR LO
 
 def start_section():
     global predictions_in_section, current_prediction
-    predictions_in_section = 0
-    current_prediction = None
+    with state_lock:
+        predictions_in_section = 0
+        current_prediction = None
 
     print("Section Starting...")
     send_to_all(sticker=STICKER_SECTION_START)
-    time.sleep(4)
+    time.sleep(3)
     send_one_prediction()
+
+def run_threaded(job_func):
+    """Schedules jobs in dedicated background threads so timing never gets skipped"""
+    job_thread = threading.Thread(target=job_func, daemon=True)
+    job_thread.start()
 
 def run_scheduler():
     while True:
         schedule.run_pending()
-        time.sleep(3)
+        time.sleep(1)
 
-# ==================== SCHEDULE ====================
-schedule.every().day.at("09:28").do(pre_section_message)
-schedule.every().day.at("11:28").do(pre_section_message)
-schedule.every().day.at("14:58").do(pre_section_message)
-schedule.every().day.at("17:28").do(pre_section_message)
-schedule.every().day.at("19:18").do(pre_section_message)
-schedule.every().day.at("21:28").do(pre_section_message)
+# ==================== SCHEDULED JOBS ====================
+schedule.every().day.at("09:28").do(run_threaded, pre_section_message)
+schedule.every().day.at("11:28").do(run_threaded, pre_section_message)
+schedule.every().day.at("14:58").do(run_threaded, pre_section_message)
+schedule.every().day.at("17:28").do(run_threaded, pre_section_message)
+schedule.every().day.at("19:18").do(run_threaded, pre_section_message)
+schedule.every().day.at("21:28").do(run_threaded, pre_section_message)
 
-schedule.every().day.at("09:30").do(start_section)
-schedule.every().day.at("11:30").do(start_section)
-schedule.every().day.at("15:00").do(start_section)
-schedule.every().day.at("17:30").do(start_section)
-schedule.every().day.at("19:20").do(start_section)
-schedule.every().day.at("21:30").do(start_section)
+schedule.every().day.at("09:30").do(run_threaded, start_section)
+schedule.every().day.at("11:30").do(run_threaded, start_section)
+schedule.every().day.at("15:00").do(run_threaded, start_section)
+schedule.every().day.at("17:30").do(run_threaded, start_section)
+schedule.every().day.at("19:20").do(run_threaded, start_section)
+schedule.every().day.at("21:30").do(run_threaded, start_section)
 
-schedule.every(8).seconds.do(check_result)
+# Result Check Loop
+schedule.every(5).seconds.do(run_threaded, check_result)
 
 print("Bot setup starting...")
 
-# Dynamic Proxy Threading Launch
-proxy_thread = threading.Thread(target=proxy_auto_refresher, daemon=True)
-proxy_thread.start()
+# Dynamic Proxy Engine Launch
+threading.Thread(target=proxy_auto_refresher, daemon=True).start()
 
+# Initial fetch
 update_history()
 
-scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-scheduler_thread.start()
+# Scheduler Thread
+threading.Thread(target=run_scheduler, daemon=True).start()
 
 bot.infinity_polling()
