@@ -37,7 +37,7 @@ IST = pytz.timezone('Asia/Kolkata')
 result_history = deque(maxlen=60)
 current_prediction = None
 predictions_in_section = 0
-MAX_PREDICTIONS = 10
+MAX_PREDICTIONS = 6
 
 SECTION_TIMES = ["09:30", "11:30", "15:00", "17:30", "19:20", "21:30"]
 
